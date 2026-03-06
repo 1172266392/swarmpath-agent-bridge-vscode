@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>SwarmPath AgentTeams</title>
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='bg' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0%25' stop-color='%232d1b69'/%3E%3Cstop offset='100%25' stop-color='%230d3b66'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='7' fill='url(%23bg)'/%3E%3Cpath d='M10 8 L16 16 L10 24' stroke='%2300e676' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round' fill='none'/%3E%3Cpath d='M16 8 L22 16 L16 24' stroke='%23ffd740' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round' fill='none'/%3E%3C/svg%3E">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23ffffff' stroke='%23d0d0d0' stroke-width='1'/%3E%3Cpath d='M10 8 L16 16 L10 24' stroke='%230ea5e9' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round' fill='none'/%3E%3Cpath d='M16 8 L22 16 L16 24' stroke='%238b5cf6' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round' fill='none'/%3E%3C/svg%3E">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
 <style>
 /* ===== Reset & Base ===== */
@@ -1642,23 +1642,15 @@ html[data-theme="light"] .theme-btn.active { background: rgba(9,105,218,.08); }
     </div>
 
     <label>工作目录</label>
-    <input id="modal-path" placeholder="/path/to/project" />
+    <div style="display:flex;gap:6px;align-items:center">
+      <input id="modal-path" placeholder="/path/to/project" style="flex:1" />
+      <button type="button" id="btn-browse-cwd" title="浏览文件夹" style="padding:6px 12px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text);cursor:pointer;white-space:nowrap;font-size:13px">📁 浏览</button>
+    </div>
     <div class="quick-paths" id="quick-paths"></div>
 
     <div id="modal-model-field">
       <label>模型</label>
-      <select id="modal-model">
-        <option value="claude-sonnet-4-6">Sonnet 4.6</option>
-        <option value="claude-opus-4-6">Opus 4.6</option>
-        <option value="claude-sonnet-4-5-20250929">Sonnet 4.5</option>
-        <option value="claude-haiku-4-5-20251001">Haiku 4.5</option>
-        <option value="deepseek-reasoner">DeepSeek R1</option>
-        <option value="deepseek-chat">DeepSeek V3</option>
-        <option value="qwen3.5-plus">Qwen 3.5 Plus</option>
-        <option value="qwen3.5-flash">Qwen 3.5 Flash</option>
-        <option value="MiniMax-M2.5">MiniMax M2.5</option>
-        <option value="MiniMax-M2.5-highspeed">MiniMax M2.5 HS</option>
-      </select>
+      <select id="modal-model"></select>
     </div>
 
     <div id="modal-perm-field">
@@ -1794,17 +1786,27 @@ html[data-theme="light"] .theme-btn.active { background: rgba(9,105,218,.08); }
 <div id="channel-editor-overlay" class="modal-overlay">
   <div class="modal" style="width:460px;">
     <h3 id="channel-editor-title">添加模型渠道</h3>
+    <label>快速选择</label>
+    <select id="channel-preset" style="margin-bottom:8px">
+      <option value="">-- 自定义 --</option>
+    </select>
     <label>渠道 ID (唯一标识)</label>
-    <input id="channel-id" placeholder="如: deepseek, qwen" />
+    <input id="channel-id" placeholder="如: my-proxy, anthropic" />
     <label>渠道名称</label>
-    <input id="channel-name" placeholder="如: DeepSeek, 阿里云 Qwen" />
+    <input id="channel-name" placeholder="如: Anthropic 官方, 我的代理" />
     <label>API Key</label>
     <input id="channel-apikey" type="password" placeholder="sk-..." />
     <label>Base URL</label>
-    <input id="channel-baseurl" placeholder="https://api.deepseek.com" />
+    <input id="channel-baseurl" placeholder="https://api.anthropic.com" />
+    <div style="margin:8px 0">
+      <button type="button" id="btn-test-channel" style="padding:5px 14px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--accent);cursor:pointer;font-size:12px">
+        🔗 测试连接 & 获取模型
+      </button>
+      <span id="channel-test-result" style="font-size:12px;margin-left:8px"></span>
+    </div>
     <div id="channel-models-group">
-      <label>模型列表 (逗号分隔)</label>
-      <input id="channel-models" placeholder="deepseek-chat, deepseek-reasoner" />
+      <label>模型列表 (逗号分隔，测试连接后自动填入)</label>
+      <input id="channel-models" placeholder="自动获取或手动输入: claude-sonnet-4-6, claude-opus-4-6" />
     </div>
     <div class="checkbox-row">
       <input type="checkbox" id="channel-enabled" checked />
@@ -2092,18 +2094,59 @@ html[data-theme="light"] .theme-btn.active { background: rgba(9,105,218,.08); }
 // Constants & State
 // =====================================================================
 const BRIDGE = location.origin;
-const MODELS = [
-  { id: 'claude-sonnet-4-6',          label: 'Sonnet 4.6' },
-  { id: 'claude-opus-4-6',            label: 'Opus 4.6' },
-  { id: 'claude-sonnet-4-5-20250929', label: 'Sonnet 4.5' },
-  { id: 'claude-haiku-4-5-20251001',  label: 'Haiku 4.5' },
-  { id: 'deepseek-reasoner',          label: 'DeepSeek R1' },
-  { id: 'deepseek-chat',              label: 'DeepSeek V3' },
-  { id: 'qwen3.5-plus',              label: 'Qwen 3.5 Plus' },
-  { id: 'qwen3.5-flash',             label: 'Qwen 3.5 Flash' },
-  { id: 'MiniMax-M2.5',              label: 'MiniMax M2.5' },
-  { id: 'MiniMax-M2.5-highspeed',    label: 'MiniMax M2.5 HS' },
-];
+let MODELS = [];
+
+// Load models dynamically: from default .env channel + custom channels
+async function refreshModelList() {
+  const seen = new Set();
+  const allModels = [];
+
+  // 1. Try to fetch models from default .env Anthropic config
+  try {
+    const envRes = await fetch(`${BRIDGE}/api/env`);
+    if (envRes.ok) {
+      const envData = await envRes.json();
+      const entries = envData.entries || [];
+      const keyEntry = entries.find(e => e.key === 'ANTHROPIC_API_KEY' && !e.commented);
+      const urlEntry = entries.find(e => e.key === 'ANTHROPIC_BASE_URL' && !e.commented);
+      if (keyEntry?.value && urlEntry?.value) {
+        try {
+          const testRes = await fetch(`${BRIDGE}/api/test-channel`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ apiKey: keyEntry.value, baseUrl: urlEntry.value }),
+          });
+          const testData = await testRes.json();
+          if (testData.ok && testData.models) {
+            for (const m of testData.models) {
+              if (!seen.has(m.id)) { seen.add(m.id); allModels.push({ id: m.id, label: m.label || m.id }); }
+            }
+          }
+        } catch {}
+      }
+    }
+  } catch {}
+
+  // 2. Merge models from custom channels
+  try {
+    const channels = await apiGet('/api/model-channels');
+    for (const ch of channels) {
+      if (!ch.enabled || !ch.models?.length) continue;
+      for (const m of ch.models) {
+        if (!seen.has(m)) { seen.add(m); allModels.push({ id: m, label: `${m} (${ch.name})` }); }
+      }
+    }
+  } catch {}
+
+  MODELS = allModels;
+
+  // Update modal select options
+  const select = $('#modal-model');
+  const curVal = select.value;
+  select.innerHTML = MODELS.length
+    ? MODELS.map(m => `<option value="${m.id}">${m.label}</option>`).join('')
+    : '<option value="" disabled>无可用模型 — 请先配置渠道</option>';
+  if (curVal && MODELS.some(m => m.id === curVal)) select.value = curVal;
+}
 function formatTimeout(min) {
   if (min <= 0) return '永久保留';
   if (min < 60) return min + '分钟';
@@ -3604,6 +3647,12 @@ async function sendMessage(prompt, { autoContinuationCount = 0 } = {}) {
     renderSidebar();
     saveMessages();
     if (state.activeSessionId === sessionId) inputTextarea.focus();
+
+    // Auto-refresh file tree after streaming completes (files may have been created/modified)
+    if (typeof feState !== 'undefined' && feState.open && state.activeSessionId === sessionId) {
+      feState.treeData = null;
+      loadFileTree(sessionId);
+    }
 
     // Auto-send pending AskUserQuestion response that was queued during streaming
     if (state._pendingAskResponse && state.activeSessionId === sessionId) {
@@ -6147,9 +6196,17 @@ function toggleModelDropdown() {
       <div class="model-option ${m.id === cur ? 'active' : ''}" data-model="${m.id}">
         <span>${m.id === cur ? '\u25CF ' : ''}${m.label}</span>
         <span style="font-size:9px;color:var(--text-muted)">${m.id}</span>
-      </div>`).join('');
-    modelDropdown.querySelectorAll('.model-option').forEach(el => {
+      </div>`).join('') +
+      `<div class="model-option" id="model-add-channel" style="border-top:1px solid var(--border);margin-top:4px;padding-top:6px;color:var(--accent)">
+        <span>+ 添加模型渠道</span>
+      </div>`;
+    modelDropdown.querySelectorAll('.model-option[data-model]').forEach(el => {
       el.addEventListener('click', () => switchModel(el.dataset.model));
+    });
+    modelDropdown.querySelector('#model-add-channel').addEventListener('click', () => {
+      modelDropdownOpen = false;
+      modelDropdown.classList.remove('open');
+      openChannelEditor();
     });
     modelDropdown.classList.add('open');
   } else {
@@ -6338,6 +6395,16 @@ $('#quick-paths').innerHTML = QUICK_PATHS.map(p =>
 ).join('');
 $('#quick-paths').querySelectorAll('.quick-path').forEach(el => {
   el.addEventListener('click', () => { $('#modal-path').value = el.dataset.path; });
+});
+
+// Browse directory button — calls native macOS folder picker via server API
+$('#btn-browse-cwd').addEventListener('click', async () => {
+  try {
+    const res = await fetch(`${BRIDGE}/api/browse-directory`);
+    if (!res.ok) return;
+    const { path } = await res.json();
+    if (path) $('#modal-path').value = path;
+  } catch {}
 });
 
 // =====================================================================
@@ -6897,9 +6964,73 @@ async function openChannelEditor(id) {
   $('#channel-editor-overlay').classList.add('open');
 }
 
+// Provider presets — auto-fill base URL, user only needs API Key
+// Presets — Anthropic Messages API compatible providers
+const CHANNEL_PRESETS = {
+  anthropic:  { name: 'Anthropic 官方',   baseUrl: 'https://api.anthropic.com' },
+  deepseek:   { name: 'DeepSeek',        baseUrl: 'https://api.deepseek.com' },
+  qwen:       { name: '阿里云 Qwen',     baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode' },
+  minimax:    { name: 'MiniMax',          baseUrl: 'https://api.minimax.chat' },
+  openrouter: { name: 'OpenRouter',       baseUrl: 'https://openrouter.ai/api' },
+  custom:     { name: '自定义代理',       baseUrl: '' },
+};
+
+// Populate preset dropdown
+(function() {
+  const sel = $('#channel-preset');
+  for (const [id, p] of Object.entries(CHANNEL_PRESETS)) {
+    const opt = document.createElement('option');
+    opt.value = id;
+    opt.textContent = p.name;
+    sel.appendChild(opt);
+  }
+})();
+
+$('#channel-preset').addEventListener('change', function() {
+  const p = CHANNEL_PRESETS[this.value];
+  if (!p) return;
+  $('#channel-id').value = this.value;
+  $('#channel-name').value = p.name;
+  $('#channel-baseurl').value = p.baseUrl;
+  $('#channel-models').value = '';
+  $('#channel-test-result').textContent = '';
+});
+
+// Test connection & fetch models
+$('#btn-test-channel').addEventListener('click', async () => {
+  const apiKey = $('#channel-apikey').value.trim();
+  const baseUrl = $('#channel-baseurl').value.trim();
+  const result = $('#channel-test-result');
+  if (!apiKey || !baseUrl) { result.textContent = '⚠ 请先填写 API Key 和 Base URL'; result.style.color = 'var(--yellow)'; return; }
+  result.textContent = '⏳ 测试中...'; result.style.color = 'var(--text-muted)';
+  try {
+    const res = await fetch(`${BRIDGE}/api/test-channel`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ apiKey, baseUrl }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      result.textContent = `✅ 连接成功 (${data.latency}ms)，发现 ${data.models.length} 个模型`;
+      result.style.color = 'var(--green)';
+      if (data.models.length) {
+        $('#channel-models').value = data.models.map(m => m.id).join(', ');
+      }
+    } else {
+      result.textContent = `❌ 失败: ${data.error || `HTTP ${data.status}`}`;
+      result.style.color = 'var(--red)';
+    }
+  } catch (err) {
+    result.textContent = `❌ 网络错误: ${err.message}`;
+    result.style.color = 'var(--red)';
+  }
+});
+
 function closeChannelEditor() {
   $('#channel-editor-overlay').classList.remove('open');
   _channelEditingId = null;
+  $('#channel-preset').value = '';
+  $('#channel-test-result').textContent = '';
   // Reset disabled/hidden states
   $('#channel-name').disabled = false;
   $('#channel-apikey').placeholder = 'sk-...';
@@ -6959,6 +7090,7 @@ async function saveChannel() {
     }
     closeChannelEditor();
     loadChannels();
+    refreshModelList();
   } catch (err) {
     alert('保存失败: ' + (err.message || err));
   }
@@ -6969,6 +7101,7 @@ async function deleteChannel(id) {
   try {
     await apiDelete(`/api/model-channels/${encodeURIComponent(id)}`);
     loadChannels();
+    refreshModelList();
   } catch {}
 }
 
@@ -6979,6 +7112,7 @@ async function toggleChannel(id, enabled) {
       body: JSON.stringify({ enabled }),
     });
     loadChannels();
+    refreshModelList();
   } catch {}
 }
 
@@ -7699,6 +7833,9 @@ async function init() {
       if (cfg.globalSkillsDir) state.globalSkillsDir = cfg.globalSkillsDir;
     } catch {}
 
+    // Load dynamic model list from model channels
+    await refreshModelList();
+
     const sessions = await apiGet('/api/session');
     const savedMessages = loadMessages();
     for (const s of sessions) {
@@ -7730,6 +7867,11 @@ async function init() {
       if (s.status === 'busy') {
         pollBusySession(s.id);
       }
+    }
+
+    // First-launch: if no models available, guide user to add a channel
+    if (MODELS.length === 0) {
+      setTimeout(() => openChannelEditor(), 500);
     }
   } catch (err) { console.error('初始化失败:', err); }
 }
@@ -8859,7 +9001,7 @@ const _FE_SVG = {
   // JSON - braces (green/yellow)
   json: _svgIcon('<text x="8" y="12.5" text-anchor="middle" font-size="12" font-weight="700" font-family="monospace" fill="{c}">{ }</text>', '#a0ad6b'),
   // Markdown
-  md: _svgIcon('<text x="8" y="12.5" text-anchor="middle" font-size="11" font-weight="700" font-family="sans-serif" fill="{c}">M\u2193</text>', '#519aba'),
+  md: _svgIcon('<text x="8" y="12.5" text-anchor="middle" font-size="9" font-weight="700" font-family="sans-serif" fill="{c}">MD</text>', '#519aba'),
   // Python
   py: _svgIcon('<path d="M8 1.5C5.5 1.5 4 2.8 4 4.5v1.5h4v.5H3.5C2 6.5 1 8 1 10s1 3.5 2.5 3.5H5v-2c0-1.3 1-2.5 2.5-2.5h3c1.1 0 2-.9 2-2V4.5c0-1.5-1.5-3-4.5-3zm-1.5 1.8a.7.7 0 110 1.4.7.7 0 010-1.4z" fill="{c}"/><path d="M8 14.5c2.5 0 4-1.3 4-3V10H8v-.5h4.5C14 9.5 15 8 15 6s-1-3.5-2.5-3.5H11v2c0 1.3-1 2.5-2.5 2.5h-3c-1.1 0-2 .9-2 2v2.5c0 1.5 1.5 3 4.5 3zm1.5-1.8a.7.7 0 110-1.4.7.7 0 010 1.4z" fill="{c}" opacity=".7"/>', '#3572a5'),
   // YAML/TOML (purple)

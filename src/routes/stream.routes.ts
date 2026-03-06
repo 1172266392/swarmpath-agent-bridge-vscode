@@ -11,7 +11,7 @@ import { join } from 'path';
 import { execSync } from 'child_process';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import type { Options as SDKOptions, HookInput, PreToolUseHookInput, PreToolUseHookSpecificOutput, SyncHookJSONOutput, SubagentStartHookInput, SubagentStopHookInput, TeammateIdleHookInput, TaskCompletedHookInput } from '@anthropic-ai/claude-agent-sdk';
-import { GLOBAL_SKILLS_DIR, BRIDGE_ROOT, MEMORY_DIR, SESSIONS_DIR, DATA_DIR, EVOLUTION_DIR, type SessionManager } from '../services/session-manager.js';
+import { GLOBAL_SKILLS_DIR, BRIDGE_ROOT, MEMORY_DIR, SESSIONS_DIR, DATA_DIR, EVOLUTION_DIR, getClaudeCodeExecutablePath, type SessionManager } from '../services/session-manager.js';
 import type { QueryRequest, SSEEvent, RawSDKMessage, RawContentBlock, Attachment, DelegationMode, DebateConfig, QueryMetrics } from '../types.js';
 import type { EvolutionEngine } from '../services/evolution-engine.js';
 import { transformSDKMessage, formatSSE, formatSSEDone } from '../utils/message-transform.js';
@@ -704,6 +704,7 @@ async function runStreamQuery(
     env: cleanEnv,
     tools: { type: 'preset', preset: 'claude_code' },
     abortController,
+    pathToClaudeCodeExecutable: getClaudeCodeExecutablePath(),
   };
 
   // System prompt

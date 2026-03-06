@@ -7,7 +7,7 @@ import type { Options as SDKOptions } from '@anthropic-ai/claude-agent-sdk';
 import type { SSEEvent, RawSDKMessage, PermissionMode, AgentDefinition, ThinkingMode, EffortLevel } from '../types.js';
 import { transformSDKMessage, formatSSE, formatSSEDone } from '../utils/message-transform.js';
 import type { SessionManager } from './session-manager.js';
-import { DATA_DIR } from './session-manager.js';
+import { DATA_DIR, getClaudeCodeExecutablePath } from './session-manager.js';
 
 export interface BridgeQueryOptions {
   maxTurns?: number;
@@ -88,6 +88,7 @@ export class SdkBridge {
       model: opts.model ?? session.model,
       env: cleanEnv,
       tools: { type: 'preset', preset: 'claude_code' },
+      pathToClaudeCodeExecutable: getClaudeCodeExecutablePath(),
     };
 
     // System prompt

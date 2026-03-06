@@ -516,57 +516,65 @@ export async function createServer() {
     },
   );
 
-  // Serve the web terminal UI with live reload
+  // Serve the web terminal UI (with optional live reload in non-Electron dev)
   const htmlPath = join(__dirname, '..', 'web', 'index.html');
+  const isElectron = process.env.ELECTRON === '1';
   const LIVE_RELOAD_SCRIPT = `<script>(function(){var ws,retry=0;function connect(){ws=new WebSocket('ws://'+location.host+'/__lr');ws.onmessage=function(e){if(e.data==='reload')location.reload()};ws.onopen=function(){retry=0};ws.onclose=function(){setTimeout(connect,Math.min(1000*Math.pow(2,retry++),5000))}};connect()})()</script>`;
 
   app.get('/', async (_request, reply) => {
     try {
       let html = readFileSync(htmlPath, 'utf-8');
-      html = html.replace('</body>', LIVE_RELOAD_SCRIPT + '</body>');
+      if (!isElectron) {
+        html = html.replace('</body>', LIVE_RELOAD_SCRIPT + '</body>');
+      }
       return reply.type('text/html').header('Cache-Control', 'no-cache, no-store, must-revalidate').send(html);
     } catch {
       return reply.code(404).send('Web UI not found');
     }
   });
 
-  // Live reload: WebSocket server + file watcher + ping/pong heartbeat
-  const wss = new WebSocketServer({ noServer: true });
-  app.server.on('upgrade', (req, socket, head) => {
-    if (req.url === '/__lr') {
-      wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws));
-    } else {
-      socket.destroy();
-    }
-  });
-  watch(join(__dirname, '..', 'web'), { recursive: true }, () => {
-    for (const client of wss.clients) {
-      if (client.readyState === WebSocket.OPEN) client.send('reload');
-    }
-  });
-  // Ping/pong to detect half-open WebSocket connections (every 30s)
-  const wsPingTimer = setInterval(() => {
-    for (const client of wss.clients) {
-      if ((client as any).__pongMissed) {
-        client.terminate();
-        continue;
+  // Live reload: WebSocket server + file watcher + ping/pong heartbeat (disabled in Electron)
+  let wss: InstanceType<typeof WebSocketServer> | null = null;
+  let wsPingTimer: ReturnType<typeof setInterval> | null = null;
+
+  if (!isElectron) {
+    wss = new WebSocketServer({ noServer: true });
+    app.server.on('upgrade', (req, socket, head) => {
+      if (req.url === '/__lr') {
+        wss!.handleUpgrade(req, socket, head, (ws) => wss!.emit('connection', ws));
+      } else {
+        socket.destroy();
       }
-      (client as any).__pongMissed = true;
-      client.ping();
-    }
-  }, 30_000);
-  wss.on('connection', (ws) => {
-    (ws as any).__pongMissed = false;
-    ws.on('pong', () => { (ws as any).__pongMissed = false; });
-  });
+    });
+    watch(join(__dirname, '..', 'web'), { recursive: true }, () => {
+      for (const client of wss!.clients) {
+        if (client.readyState === WebSocket.OPEN) client.send('reload');
+      }
+    });
+    // Ping/pong to detect half-open WebSocket connections (every 30s)
+    wsPingTimer = setInterval(() => {
+      for (const client of wss!.clients) {
+        if ((client as any).__pongMissed) {
+          client.terminate();
+          continue;
+        }
+        (client as any).__pongMissed = true;
+        client.ping();
+      }
+    }, 30_000);
+    wss.on('connection', (ws) => {
+      (ws as any).__pongMissed = false;
+      ws.on('pong', () => { (ws as any).__pongMissed = false; });
+    });
+  }
 
   // Start evolution engine
   evolutionEngine.start();
 
   // Graceful shutdown
   const shutdown = async () => {
-    clearInterval(wsPingTimer);
-    wss.close();
+    if (wsPingTimer) clearInterval(wsPingTimer);
+    if (wss) wss.close();
     backgroundExec.destroy();
     evolutionEngine.destroy();
     sessionManager.destroy();

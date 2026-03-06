@@ -8,6 +8,7 @@ data/
 # Build output
 dist/
 node_modules/
+release/
 
 # Environment
 .env

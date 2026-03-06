@@ -4,7 +4,8 @@
  */
 
 import { mkdirSync, readFileSync, readdirSync, writeFileSync, existsSync, unlinkSync, rmSync } from 'fs';
-import { join } from 'path';
+import { join, resolve } from 'path';
+import { createRequire } from 'module';
 import { nanoid } from 'nanoid';
 import type { Session, CreateSessionRequest, HistoryEntry, PermissionMode, DelegationMode, McpServerEntry, ModelChannel } from '../types.js';
 
@@ -14,7 +15,7 @@ const DEFAULT_CWD = process.env.DEFAULT_CWD ?? process.cwd();
 //   Zone 1: src/              — Source code (git tracked)
 //   Zone 2: knowledge/        — Knowledge content (git tracked, user-editable)
 //   Zone 3: data/             — Runtime data (gitignored)
-export const BRIDGE_ROOT = process.cwd(); // claude-agent-bridge install root
+export const BRIDGE_ROOT = process.env.BRIDGE_ROOT || process.cwd(); // claude-agent-bridge install root
 export const DATA_DIR = process.env.DATA_DIR ?? join(BRIDGE_ROOT, 'data');
 export const SESSIONS_DIR = join(DATA_DIR, 'sessions');
 export const UPLOADS_DIR = join(DATA_DIR, 'uploads');
@@ -30,6 +31,17 @@ const SDK_CACHE_DIR = join(DATA_DIR, 'sdk-cache');
 const CONFIG_FILE = join(CONFIG_DIR, 'server-config.json');
 const MCP_SERVERS_FILE = join(CONFIG_DIR, 'mcp-servers.json');
 const MODEL_CHANNELS_FILE = join(CONFIG_DIR, 'model-channels.json');
+
+/** Resolve the path to the Claude Agent SDK's bundled cli.js for use as pathToClaudeCodeExecutable. */
+export function getClaudeCodeExecutablePath(): string {
+  try {
+    const require = createRequire(join(BRIDGE_ROOT, 'package.json'));
+    return require.resolve('@anthropic-ai/claude-agent-sdk/cli.js');
+  } catch {
+    // Fallback: resolve relative to BRIDGE_ROOT
+    return join(BRIDGE_ROOT, 'node_modules', '@anthropic-ai', 'claude-agent-sdk', 'cli.js');
+  }
+}
 
 export interface ServerConfig {
   maxSessions: number;

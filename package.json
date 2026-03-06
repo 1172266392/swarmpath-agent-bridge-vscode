@@ -3,11 +3,14 @@
   "version": "2.0.0",
   "description": "SwarmPath Agent Bridge: Claude Agent SDK → SSE → Web Frontend (with Evolution Engine + Knowledge Base)",
   "type": "module",
+  "main": "electron/main.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "build": "tsc",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "electron:dev": "electron .",
+    "electron:build": "npm run build && electron-builder"
   },
   "engines": {
     "node": ">=18.0.0"
@@ -24,7 +27,46 @@
   "devDependencies": {
     "@types/node": "^20.17.0",
     "@types/ws": "^8.18.1",
+    "electron": "^34.5.8",
+    "electron-builder": "^25.1.8",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0"
+  },
+  "build": {
+    "appId": "com.swarmpath.agent-bridge",
+    "productName": "SwarmPath Agent Bridge",
+    "asar": false,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "web/**/*",
+      "knowledge/**/*",
+      "electron/**/*",
+      "node_modules/**/*",
+      ".env",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "icon": "electron/icon.icns",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "electron/icon.png"
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "icon": "electron/icon.png"
+    }
   }
 }

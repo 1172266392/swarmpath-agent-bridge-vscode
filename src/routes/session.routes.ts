@@ -417,4 +417,29 @@ export function registerSessionRoutes(app: FastifyInstance, sessionManager: Sess
     if (!ok) return reply.code(404).send({ error: 'Channel not found' });
     return reply.send({ ok: true });
   });
+
+  /** Fetch models from a provider's /v1/models endpoint — also serves as connection test */
+  app.post<{ Body: { apiKey: string; baseUrl: string } }>('/api/test-channel', async (request, reply) => {
+    const { apiKey, baseUrl } = request.body as { apiKey: string; baseUrl: string };
+    if (!apiKey || !baseUrl) return reply.code(400).send({ error: 'apiKey and baseUrl required' });
+
+    const url = baseUrl.replace(/\/+$/, '') + '/v1/models';
+    const start = Date.now();
+    try {
+      const res = await fetch(url, {
+        headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+        signal: AbortSignal.timeout(10_000),
+      });
+      const latency = Date.now() - start;
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        return reply.send({ ok: false, latency, status: res.status, error: text || res.statusText });
+      }
+      const data = await res.json() as { data?: Array<{ id: string; display_name?: string }> };
+      const models = (data.data || []).map(m => ({ id: m.id, label: m.display_name || m.id }));
+      return reply.send({ ok: true, latency, models });
+    } catch (err) {
+      return reply.send({ ok: false, latency: Date.now() - start, error: err instanceof Error ? err.message : String(err) });
+    }
+  });
 }
