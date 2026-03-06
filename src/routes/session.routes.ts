@@ -130,6 +130,24 @@ export function registerSessionRoutes(app: FastifyInstance, sessionManager: Sess
     return reply.send(session);
   });
 
+  /** Save frontend chat messages to server (survives WebView storage wipes) */
+  app.put<{ Params: { id: string }; Body: { messages: unknown[] } }>('/api/session/:id/messages', async (request, reply) => {
+    const session = sessionManager.get(request.params.id);
+    if (!session) return reply.code(404).send({ error: 'Session not found' });
+    const { messages } = request.body ?? {};
+    if (!Array.isArray(messages)) return reply.code(400).send({ error: 'messages must be an array' });
+    sessionManager.saveMessagesDebounced(request.params.id, messages);
+    return reply.send({ ok: true });
+  });
+
+  /** Load frontend chat messages from server */
+  app.get<{ Params: { id: string } }>('/api/session/:id/messages', async (request, reply) => {
+    const session = sessionManager.get(request.params.id);
+    if (!session) return reply.code(404).send({ error: 'Session not found' });
+    const messages = sessionManager.loadMessages(request.params.id);
+    return reply.send({ messages: messages ?? [] });
+  });
+
   /** Clear session context (equivalent to /clear in Claude Code CLI) */
   app.post<{ Params: { id: string } }>('/api/session/:id/clear', async (request, reply) => {
     const session = sessionManager.get(request.params.id);
@@ -423,21 +441,75 @@ export function registerSessionRoutes(app: FastifyInstance, sessionManager: Sess
     const { apiKey, baseUrl } = request.body as { apiKey: string; baseUrl: string };
     if (!apiKey || !baseUrl) return reply.code(400).send({ error: 'apiKey and baseUrl required' });
 
-    const url = baseUrl.replace(/\/+$/, '') + '/v1/models';
+    const base = baseUrl.replace(/\/+$/, '');
     const start = Date.now();
+
+    // All providers use Anthropic Messages API format (x-api-key header)
+    const headers: Record<string, string> = {
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'Content-Type': 'application/json',
+    };
+
+    // Step 1: Try /v1/models to auto-discover model list (Anthropic official)
     try {
-      const res = await fetch(url, {
+      const modelsUrl = base + '/v1/models';
+      const modelsRes = await fetch(modelsUrl, {
         headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
         signal: AbortSignal.timeout(10_000),
       });
-      const latency = Date.now() - start;
-      if (!res.ok) {
-        const text = await res.text().catch(() => '');
-        return reply.send({ ok: false, latency, status: res.status, error: text || res.statusText });
+      if (modelsRes.ok) {
+        const latency = Date.now() - start;
+        const data = await modelsRes.json() as { data?: Array<{ id: string; display_name?: string }> };
+        const models = (data.data || []).map(m => ({ id: m.id, label: m.display_name || m.id }));
+        return reply.send({ ok: true, latency, models });
       }
-      const data = await res.json() as { data?: Array<{ id: string; display_name?: string }> };
-      const models = (data.data || []).map(m => ({ id: m.id, label: m.display_name || m.id }));
-      return reply.send({ ok: true, latency, models });
+    } catch {
+      // /v1/models not available, fall through to messages test
+    }
+
+    // Step 2: Verify API key via minimal /v1/messages request (works for all Anthropic-compatible providers)
+    try {
+      const messagesUrl = base + '/v1/messages';
+      const res = await fetch(messagesUrl, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-20250514',
+          max_tokens: 1,
+          messages: [{ role: 'user', content: 'hi' }],
+        }),
+        signal: AbortSignal.timeout(15_000),
+      });
+      const latency = Date.now() - start;
+      const body = await res.text().catch(() => '');
+
+      // 2xx or 4xx with known error = connection works (API key may be valid or invalid)
+      if (res.ok) {
+        // Connection + auth OK
+        return reply.send({ ok: true, latency, models: [], message: '连接成功！请手动填入模型名称。' });
+      }
+
+      // Parse error to give helpful feedback
+      let errMsg = `${res.status} ${res.statusText}`;
+      try {
+        const errData = JSON.parse(body);
+        const innerMsg = errData?.error?.message || errData?.message || '';
+        if (innerMsg) errMsg = innerMsg;
+      } catch {}
+
+      // 401/403 = endpoint exists but auth failed
+      if (res.status === 401 || res.status === 403) {
+        return reply.send({ ok: false, latency, error: `认证失败: ${errMsg}` });
+      }
+
+      // 400 with "model" error = auth OK, model name wrong → connection is valid
+      if (res.status === 400 && /model/i.test(errMsg)) {
+        return reply.send({ ok: true, latency, models: [], message: '连接成功！请手动填入模型名称。' });
+      }
+
+      // Other errors
+      return reply.send({ ok: false, latency, error: errMsg });
     } catch (err) {
       return reply.send({ ok: false, latency: Date.now() - start, error: err instanceof Error ? err.message : String(err) });
     }

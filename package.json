@@ -10,7 +10,11 @@
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "electron:dev": "electron .",
-    "electron:build": "npm run build && electron-builder"
+    "electron:build": "npm run build && electron-builder",
+    "build:sidecar": "npm run build && bun build --compile dist/index.js --outfile src-tauri/binaries/swarmpath-server-aarch64-apple-darwin",
+    "build:sdk-assets": "mkdir -p src-tauri/sdk-assets && cp -r node_modules/@anthropic-ai/claude-agent-sdk/cli.js src-tauri/sdk-assets/ && test -d node_modules/@anthropic-ai/claude-agent-sdk/vendor && cp -r node_modules/@anthropic-ai/claude-agent-sdk/vendor src-tauri/sdk-assets/ || true",
+    "tauri:dev": "npm run build:sidecar && npm run build:sdk-assets && npx tauri dev",
+    "tauri:build": "npm run build:sidecar && npm run build:sdk-assets && npx tauri build"
   },
   "engines": {
     "node": ">=18.0.0"
@@ -25,6 +29,7 @@
     "ws": "^8.19.0"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2.10.1",
     "@types/node": "^20.17.0",
     "@types/ws": "^8.18.1",
     "electron": "^34.5.8",

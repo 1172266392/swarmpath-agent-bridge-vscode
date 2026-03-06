@@ -1426,6 +1426,9 @@ html[data-theme="light"] .theme-btn.active { background: rgba(9,105,218,.08); }
 .fe-tree-item .fe-arrow.expanded { transform: rotate(90deg); }
 .fe-tree-item .fe-name { overflow: hidden; text-overflow: ellipsis; }
 .fe-tree-item .fe-size { margin-left: auto; font-size: 10px; color: var(--text-muted); padding-left: 8px; flex-shrink: 0; }
+.fe-tree-item .fe-delete { display: none; margin-left: 4px; padding: 0 3px; font-size: 11px; color: var(--text-muted); background: none; border: none; cursor: pointer; flex-shrink: 0; border-radius: 3px; line-height: 1; }
+.fe-tree-item:hover .fe-delete { display: inline-block; }
+.fe-tree-item .fe-delete:hover { color: var(--red, #f44336); background: rgba(244,67,54,.12); }
 .fe-empty { padding: 20px; text-align: center; color: var(--text-muted); font-size: 11px; }
 
 /* Resize handle */
@@ -2132,7 +2135,7 @@ async function refreshModelList() {
     for (const ch of channels) {
       if (!ch.enabled || !ch.models?.length) continue;
       for (const m of ch.models) {
-        if (!seen.has(m)) { seen.add(m); allModels.push({ id: m, label: `${m} (${ch.name})` }); }
+        if (!seen.has(m)) { seen.add(m); allModels.push({ id: m, label: m }); }
       }
     }
   } catch {}
@@ -2235,28 +2238,39 @@ setInterval(() => {
 }, 1000);
 
 // =====================================================================
-// LocalStorage persistence for chat messages
+// LocalStorage + Server persistence for chat messages
 // =====================================================================
 const LS_KEY = 'claude-bridge-messages';
+
+/** Strip large binary data from messages before saving */
+function stripMessagesForStorage(messages) {
+  return messages.map(msg => ({
+    ...msg,
+    _streaming: undefined,  // never persist streaming flag
+    blocks: msg.blocks?.map(b => {
+      if (b.type === 'mcp_image') return { type: 'mcp_image', mimeType: b.mimeType, stripped: true };
+      if (b.type === 'tool_result' && b.images) {
+        const { images, ...rest } = b;
+        return rest;
+      }
+      return b;
+    }),
+  }));
+}
 
 function saveMessages() {
   try {
     const data = {};
     for (const [id, s] of state.sessions) {
       if (s.messages?.length) {
-        // Strip large base64 data from mcp_image blocks to avoid exceeding localStorage quota
-        data[id] = s.messages.map(msg => ({
-          ...msg,
-          blocks: msg.blocks?.map(b => {
-            if (b.type === 'mcp_image') return { type: 'mcp_image', mimeType: b.mimeType, stripped: true };
-            // Also strip images from tool_result blocks
-            if (b.type === 'tool_result' && b.images) {
-              const { images, ...rest } = b;
-              return rest;
-            }
-            return b;
-          }),
-        }));
+        const stripped = stripMessagesForStorage(s.messages);
+        data[id] = stripped;
+        // Also save to server (fire-and-forget, debounced server-side)
+        fetch(`${BRIDGE}/api/session/${id}/messages`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ messages: stripped }),
+        }).catch(() => {});
       }
     }
     localStorage.setItem(LS_KEY, JSON.stringify(data));
@@ -2271,6 +2285,16 @@ function loadMessages() {
     if (!raw) return {};
     return JSON.parse(raw);
   } catch { return {}; }
+}
+
+/** Load messages from server for a specific session (fallback when localStorage is empty) */
+async function loadMessagesFromServer(sessionId) {
+  try {
+    const res = await fetch(`${BRIDGE}/api/session/${sessionId}/messages`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.messages?.length ? data.messages : null;
+  } catch { return null; }
 }
 
 function clearSessionMessages(sessionId) {
@@ -3471,7 +3495,7 @@ async function sendMessage(prompt, { autoContinuationCount = 0 } = {}) {
   if (autoContinuationCount > 0) userMsg.isAutoContinuation = true;
   session.messages.push(userMsg);
 
-  const assistantMsg = { id: `a-${Date.now()}`, role: 'assistant', blocks: [], timestamp: Date.now() };
+  const assistantMsg = { id: `a-${Date.now()}`, role: 'assistant', blocks: [], timestamp: Date.now(), _streaming: true };
   session.messages.push(assistantMsg);
   // Track agent lifecycle counters DURING streaming (before result handler mutates blocks)
   let _agentStarts = 0, _agentDones = 0, _teamDeleted = false;
@@ -3636,6 +3660,7 @@ async function sendMessage(prompt, { autoContinuationCount = 0 } = {}) {
       assistantMsg.blocks.push({ type: 'error', message: errMsg });
     }
   } finally {
+    assistantMsg._streaming = false;
     state.streamingSessions.delete(sessionId);
     state.activeAgents.clear();
     updateInputUI();
@@ -3933,12 +3958,6 @@ function processSSEEvent(msg, event, session) {
       break;
     case 'tool_result':
       msg.blocks.push({ type: 'tool_result', ...event.data });
-      // Extract images from tool_result and add as top-level image blocks (visible outside collapsed tool groups)
-      if (event.data.images && event.data.images.length > 0) {
-        for (const img of event.data.images) {
-          msg.blocks.push({ type: 'mcp_image', mimeType: img.mimeType, data: img.data });
-        }
-      }
       // Mark agent as completed when its tool_result arrives
       // Skip: team entries (only TeamDelete marks team as closed)
       // Skip: background agents (tool_result just means "spawned", not "done")
@@ -4385,8 +4404,8 @@ function renderMessages() {
     if (msg.outputTokens) html += `<span class="msg-cost" title="输出 tokens">${(msg.outputTokens/1000).toFixed(1)}K out</span>`;
     html += `</div><div class="msg-body">`;
     html += renderBlocksGrouped(msg.blocks);
-    // File preview cards for assistant messages (Write/Edit/NotebookEdit)
-    if (!isUser) html += renderFileCards(msg.blocks);
+    // File preview cards for assistant messages — only after streaming completes
+    if (!isUser && !msg._streaming) html += renderFileCards(msg.blocks);
     // Plan-first approval panel (in full render path)
     if (msg._planReady && !msg._planApproved && !msg._planRevising) {
       html += `<div class="plan-approval-panel">
@@ -4540,8 +4559,8 @@ function updateLastAssistantMessage(msg, session) {
       }
     });
 
-    // Re-render only the blocks + file cards
-    bodyEl.innerHTML = renderBlocksGrouped(msg.blocks) + renderFileCards(msg.blocks);
+    // Re-render blocks; file cards only after streaming completes (avoid premature path extraction)
+    bodyEl.innerHTML = renderBlocksGrouped(msg.blocks) + (msg._streaming ? '' : renderFileCards(msg.blocks));
 
     // Swap back preserved AskUserQuestion nodes to avoid losing interaction state
     bodyEl.querySelectorAll('.block-ask').forEach(newEl => {
@@ -5472,10 +5491,9 @@ function esc(str) {
 function extractGeneratedFiles(blocks) {
   const files = [];
   const seenPaths = new Set();
-  const seenNames = new Set();
+  const deletedPaths = new Set();   // Track files explicitly deleted in this turn
 
   const DELIVERABLE_EXTS = /\.(docx|doc|pptx|ppt|xlsx|xls|pdf|csv|png|jpg|jpeg|gif|webp|svg|ipynb|html|htm)$/i;
-  const SOURCE_EXTS = /\.(js|ts|jsx|tsx|py|rb|go|rs|java|cpp|c|h|sh|bash|css|scss|md|txt|json|xml|yaml|yml|toml|ini|conf|sql)$/i;
 
   // Skip intermediate/build source files — only show final deliverables
   const SKIP_DIRS = /\/(node_modules|\.next|\.cache|\.parcel-cache|src|public|components|lib|utils|hooks|pages|app)\//i;
@@ -5484,124 +5502,144 @@ function extractGeneratedFiles(blocks) {
   function isDeliverable(fp, name) {
     if (SKIP_NAMES.test(name)) return false;
     if (SKIP_DIRS.test(fp)) {
-      // Allow files in dist/build/out directories even if nested
       if (/\/(dist|build|out|output|artifacts)\//.test(fp)) return true;
       return false;
     }
     return true;
   }
 
-  // === Pass 1: Collect authoritative paths from Write/Edit tool blocks ===
-  // These have exact file paths, so they always take priority
-  for (const block of blocks) {
-    if (block.type === 'tool_use' && (block.toolName === 'Write' || block.toolName === 'Edit' || block.toolName === 'NotebookEdit')) {
-      const fp = block.toolInput?.file_path || block.toolInput?.notebook_path;
-      if (fp && !seenPaths.has(fp)) {
-        const name = fp.split('/').pop();
-        const ext = name.includes('.') ? name.split('.').pop().toLowerCase() : '';
-        if (DELIVERABLE_EXTS.test(fp) && !seenNames.has(name.toLowerCase()) && isDeliverable(fp, name)) {
-          seenPaths.add(fp);
-          seenNames.add(name.toLowerCase());
-          files.push({ path: fp, name, ext });
-        }
-      }
-    }
-  }
-
-  // Filter: reject placeholder/example paths that AI commonly outputs in text
+  // Reject placeholder/example paths
   const PLACEHOLDER_PATH = /^\/(path|example|tmp\/example|some|your|my|foo|bar|dir|folder)\//i;
   const REAL_PATH_PREFIX = /^\/(Users|home|tmp|var|opt|etc|root|mnt|srv|private|data)\//;
   function isRealPath(fp) {
     if (PLACEHOLDER_PATH.test(fp)) return false;
-    // Text-extracted paths must start with a known real prefix or be relative
     return true;
   }
 
-  // === Pass 2: Collect from Bash commands ===
+  // Skip glob patterns
+  function hasGlob(fp) { return /[*?[\]{}]/.test(fp); }
+
+  // Commands that destroy/remove files — paths in these are NOT outputs
+  const DESTRUCTIVE_CMDS = /\b(rm|del|unlink|rmdir|trash|shred)\b/;
+  // Commands that only read/inspect files — paths in these are NOT outputs
+  const READONLY_CMDS = /^\s*(cat|head|tail|less|more|file|stat|wc|md5|sha\w*sum|xxd|hexdump|strings|diff|cmp|ls|find|du|tree|open|xdg-open)\s/;
+
+  // ---------------------------------------------------------------
+  // Pre-scan: detect deleted paths so we can exclude them later
+  // ---------------------------------------------------------------
   for (const block of blocks) {
     if (block.type === 'tool_use' && block.toolName === 'Bash') {
       const cmd = block.toolInput?.command || '';
+      if (DESTRUCTIVE_CMDS.test(cmd)) {
+        const paths = cmd.match(/\/[^\s"';&|>]+\.\w+/g) || [];
+        for (const fp of paths) {
+          if (!hasGlob(fp)) deletedPaths.add(fp);
+        }
+      }
+    }
+  }
+
+  // Helper: add a file if it passes all checks
+  function tryAdd(fp) {
+    if (!fp || hasGlob(fp) || fp.startsWith('//')) return false;
+    if (!DELIVERABLE_EXTS.test(fp)) return false;
+    if (seenPaths.has(fp) || deletedPaths.has(fp)) return false;
+    if (!isRealPath(fp)) return false;
+    const name = fp.split('/').pop();
+    if (!isDeliverable(fp, name)) return false;
+    seenPaths.add(fp);
+    const ext = name.includes('.') ? name.split('.').pop().toLowerCase() : '';
+    files.push({ path: fp, name, ext });
+    return true;
+  }
+
+  // === Pass 1: Write/Edit tool blocks (authoritative — exact paths) ===
+  for (const block of blocks) {
+    if (block.type === 'tool_use' && (block.toolName === 'Write' || block.toolName === 'Edit' || block.toolName === 'NotebookEdit')) {
+      const fp = block.toolInput?.file_path || block.toolInput?.notebook_path;
+      tryAdd(fp);
+    }
+  }
+
+  // === Pass 2: Bash commands — only real output-producing commands ===
+  // Build map: toolId → command string (for Pass 3 to reference)
+  const bashCmdMap = new Map();
+  for (const block of blocks) {
+    if (block.type === 'tool_use' && block.toolName === 'Bash') {
+      const cmd = block.toolInput?.command || '';
+      if (block.toolId) bashCmdMap.set(block.toolId, cmd);
+
+      // Skip destructive commands (rm, del, etc.)
+      if (DESTRUCTIVE_CMDS.test(cmd)) continue;
+      // Skip read-only/inspection commands (cat, ls, head, etc.)
+      if (READONLY_CMDS.test(cmd)) continue;
+
       const pathMatches = cmd.match(/\/[^\s"';&|>]+\.\w+/g) || [];
       for (const fp of pathMatches) {
-        if (fp.startsWith('//')) continue; // skip protocol-relative external URLs
-        if (!seenPaths.has(fp) && DELIVERABLE_EXTS.test(fp) && isRealPath(fp) && isDeliverable(fp, fp.split('/').pop())) {
-          const name = fp.split('/').pop();
-          if (seenNames.has(name.toLowerCase())) continue;
-          // For Bash: require output patterns OR last argument position
-          const isOutput = cmd.includes('> ' + fp) || cmd.includes('>' + fp)
-            || cmd.includes('-o ' + fp) || cmd.includes('--output ' + fp)
-            || cmd.includes('--output=' + fp) || cmd.endsWith(fp)
-            || cmd.includes('--save ' + fp) || cmd.includes('--dest ' + fp);
-          if (isOutput) {
-            seenPaths.add(fp);
-            seenNames.add(name.toLowerCase());
-            const ext = name.includes('.') ? name.split('.').pop().toLowerCase() : '';
-            files.push({ path: fp, name, ext });
+        if (hasGlob(fp) || fp.startsWith('//')) continue;
+        if (!DELIVERABLE_EXTS.test(fp) || seenPaths.has(fp) || deletedPaths.has(fp)) continue;
+        // Require explicit output indicators
+        const isOutput = cmd.includes('> ' + fp) || cmd.includes('>' + fp)
+          || cmd.includes('-o ' + fp) || cmd.includes('--output ' + fp)
+          || cmd.includes('--output=' + fp)
+          || cmd.includes('--save ' + fp) || cmd.includes('--dest ' + fp);
+        if (isOutput) { tryAdd(fp); continue; }
+        // For creative commands (screencapture, convert, etc.), check if fp appears
+        // as the last path-like arg before a command separator (&&, ;, |) or end of string
+        const CREATIVE_CMD = /\b(cp|mv|convert|ffmpeg|screencapture|scrot|import|magick|sips|qlmanage)\b/;
+        if (CREATIVE_CMD.test(cmd)) {
+          // Split by && or ; to handle chained commands, check each sub-command
+          const subCmds = cmd.split(/\s*(?:&&|;)\s*/);
+          for (const sub of subCmds) {
+            if (CREATIVE_CMD.test(sub) && sub.includes(fp)) {
+              // fp should be the last path-like token in this sub-command (= output)
+              const tokens = sub.trim().split(/\s+/);
+              const lastPathToken = [...tokens].reverse().find(t => t.startsWith('/') || t.includes('.'));
+              if (lastPathToken === fp) { tryAdd(fp); break; }
+            }
           }
         }
       }
     }
   }
 
-  // === Pass 3: Collect from Bash tool_result only (skip Read/Edit/Grep — their content is documents, not outputs) ===
-  // Build toolId→toolName map from tool_use blocks
-  const bashToolIds = new Set();
+  // === Pass 3: Bash tool_result — only for creative commands ===
+  // Skip results from destructive/readonly commands
   for (const block of blocks) {
-    if (block.type === 'tool_use' && block.toolName === 'Bash' && block.toolId) bashToolIds.add(block.toolId);
-  }
-  for (const block of blocks) {
-    if (block.type === 'tool_result' && block.content
-        && (block.toolName === 'Bash' || bashToolIds.has(block.toolId))) {
+    if (block.type === 'tool_result' && block.content) {
+      const parentCmd = bashCmdMap.get(block.toolId) || '';
+      // Only process results from non-destructive, non-readonly Bash commands
+      if (!parentCmd || DESTRUCTIVE_CMDS.test(parentCmd) || READONLY_CMDS.test(parentCmd)) continue;
+      // Only extract if the command looks like it generates files
+      if (!/\b(cp|mv|convert|ffmpeg|screencapture|scrot|magick|sips|qlmanage|curl.*-o|wget|pbpaste.*>|python|node|swift)\b/.test(parentCmd)
+          && !/>\s*\//.test(parentCmd)) continue;
+
       const content = block.content;
       const pathMatches = content.match(/\/[^\s"';&|>\n]+\.\w{2,5}/g) || [];
       for (const fp of pathMatches) {
-        if (fp.startsWith('//')) continue; // skip protocol-relative external URLs
-        if (DELIVERABLE_EXTS.test(fp) && !seenPaths.has(fp) && isRealPath(fp) && isDeliverable(fp, fp.split('/').pop())) {
-          const name = fp.split('/').pop();
-          if (seenNames.has(name.toLowerCase())) continue;
-          seenPaths.add(fp);
-          seenNames.add(name.toLowerCase());
-          const ext = name.includes('.') ? name.split('.').pop().toLowerCase() : '';
-          files.push({ path: fp, name, ext });
+        tryAdd(fp);
+      }
+    }
+  }
+
+  // === Pass 4: Text blocks — only "saved to" / "已保存到" patterns ===
+  const hasToolActions = blocks.some(b => b.type === 'tool_use');
+  if (hasToolActions) {
+    for (const block of blocks) {
+      if (block.type === 'text' && block.text) {
+        const savePat = /(?:已保存到|saved\s+(?:to|at|in)|写入到?|生成到?|输出到?|created\s+(?:at|in)|已(?:截图|生成|导出|输出).*?(?:到|为|at))[:\s]*([/\w./-]+\.\w{2,5})/gi;
+        let m;
+        while ((m = savePat.exec(block.text)) !== null) {
+          const fp = m[1];
+          if (!REAL_PATH_PREFIX.test(fp)) continue;
+          tryAdd(fp);
         }
       }
     }
   }
 
-  // === Pass 4: Text blocks — strictest heuristic, requires real path prefix ===
-  for (const block of blocks) {
-    if (block.type === 'text' && block.text) {
-      const pathMatches = block.text.match(/(?:\/[\w./-]+\.\w{2,5})/g) || [];
-      for (const fp of pathMatches) {
-        if (DELIVERABLE_EXTS.test(fp) && !seenPaths.has(fp) && fp.split('/').length >= 3
-            && isRealPath(fp) && REAL_PATH_PREFIX.test(fp) && isDeliverable(fp, fp.split('/').pop())) {
-          const name = fp.split('/').pop();
-          if (seenNames.has(name.toLowerCase())) continue;
-          seenPaths.add(fp);
-          seenNames.add(name.toLowerCase());
-          const ext = name.includes('.') ? name.split('.').pop().toLowerCase() : '';
-          files.push({ path: fp, name, ext });
-        }
-      }
-      const savePat = /([\w.-]+\.\w{2,5})\s*(?:已保存到|saved\s+(?:to|at|in)|写入到?|生成到?|输出到?|created\s+(?:at|in))[\s\S]{0,60}?(\/[\w./-]+\/)/gi;
-      let m;
-      while ((m = savePat.exec(block.text)) !== null) {
-        const fname = m[1];
-        if (seenNames.has(fname.toLowerCase())) continue;
-        const dir = m[2].replace(/\/+$/, '');
-        if (DELIVERABLE_EXTS.test(fname) && isRealPath(dir + '/' + fname) && isDeliverable(dir + '/' + fname, fname)) {
-          const fp = dir + '/' + fname;
-          if (!seenPaths.has(fp)) {
-            seenPaths.add(fp);
-            seenNames.add(fname.toLowerCase());
-            const ext = fname.split('.').pop().toLowerCase();
-            files.push({ path: fp, name: fname, ext });
-          }
-        }
-      }
-    }
-  }
-  return files;
+  // === Final: remove files that were deleted later in the same turn ===
+  return files.filter(f => !deletedPaths.has(f.path));
 }
 
 function fileIcon(ext) {
@@ -5704,15 +5742,19 @@ async function openFilePreview(path, name, ext) {
         break;
       }
       case 'png': case 'jpg': case 'jpeg': case 'gif': case 'webp': case 'svg': {
+        const wrap = document.createElement('div');
+        wrap.style.cssText = 'display:flex;align-items:center;justify-content:center;flex:1;height:100%;overflow:auto;padding:16px;';
         const img = new Image();
         img.className = 'image-preview';
+        img.style.cssText = 'max-width:100%;max-height:100%;object-fit:contain;border-radius:8px;cursor:pointer;';
         img.onclick = () => openLightbox(img.src);
         img.onerror = () => {
           contentEl.innerHTML = `<div class="preview-error">图片加载失败<br><small style="color:var(--text-muted)">${esc(url)}</small><br><br><button onclick="downloadFile('${esc(path).replace(/'/g,'&#39;')}','${esc(name).replace(/'/g,'&#39;')}')" style="padding:6px 16px;background:var(--accent);color:#fff;border:none;border-radius:6px;cursor:pointer">下载文件</button></div>`;
         };
         img.src = url;
+        wrap.appendChild(img);
         contentEl.innerHTML = '';
-        contentEl.appendChild(img);
+        contentEl.appendChild(wrap);
         break;
       }
       case 'pptx': case 'ppt': case 'xlsx': case 'xls': {
@@ -6195,7 +6237,6 @@ function toggleModelDropdown() {
     modelDropdown.innerHTML = MODELS.map(m => `
       <div class="model-option ${m.id === cur ? 'active' : ''}" data-model="${m.id}">
         <span>${m.id === cur ? '\u25CF ' : ''}${m.label}</span>
-        <span style="font-size:9px;color:var(--text-muted)">${m.id}</span>
       </div>`).join('') +
       `<div class="model-option" id="model-add-channel" style="border-top:1px solid var(--border);margin-top:4px;padding-top:6px;color:var(--accent)">
         <span>+ 添加模型渠道</span>
@@ -6967,12 +7008,12 @@ async function openChannelEditor(id) {
 // Provider presets — auto-fill base URL, user only needs API Key
 // Presets — Anthropic Messages API compatible providers
 const CHANNEL_PRESETS = {
-  anthropic:  { name: 'Anthropic 官方',   baseUrl: 'https://api.anthropic.com' },
-  deepseek:   { name: 'DeepSeek',        baseUrl: 'https://api.deepseek.com' },
-  qwen:       { name: '阿里云 Qwen',     baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode' },
-  minimax:    { name: 'MiniMax',          baseUrl: 'https://api.minimax.chat' },
-  openrouter: { name: 'OpenRouter',       baseUrl: 'https://openrouter.ai/api' },
-  custom:     { name: '自定义代理',       baseUrl: '' },
+  anthropic:  { name: 'Anthropic 官方',   baseUrl: 'https://api.anthropic.com', models: '' },
+  deepseek:   { name: 'DeepSeek',        baseUrl: 'https://api.deepseek.com/anthropic', models: 'deepseek-reasoner, deepseek-chat' },
+  qwen:       { name: '阿里云 Qwen',     baseUrl: 'https://dashscope.aliyuncs.com/apps/anthropic', models: 'qwen3.5-plus, qwen3.5-flash' },
+  minimax:    { name: 'MiniMax',          baseUrl: 'https://api.minimaxi.com/anthropic', models: 'MiniMax-M2.5, MiniMax-M2.5-highspeed' },
+  openrouter: { name: 'OpenRouter',       baseUrl: 'https://openrouter.ai/api', models: '' },
+  custom:     { name: '自定义代理',       baseUrl: '', models: '' },
 };
 
 // Populate preset dropdown
@@ -6992,7 +7033,7 @@ $('#channel-preset').addEventListener('change', function() {
   $('#channel-id').value = this.value;
   $('#channel-name').value = p.name;
   $('#channel-baseurl').value = p.baseUrl;
-  $('#channel-models').value = '';
+  $('#channel-models').value = p.models || '';
   $('#channel-test-result').textContent = '';
 });
 
@@ -7011,11 +7052,16 @@ $('#btn-test-channel').addEventListener('click', async () => {
     });
     const data = await res.json();
     if (data.ok) {
-      result.textContent = `✅ 连接成功 (${data.latency}ms)，发现 ${data.models.length} 个模型`;
-      result.style.color = 'var(--green)';
-      if (data.models.length) {
+      if (data.models && data.models.length) {
+        result.textContent = `✅ 连接成功 (${data.latency}ms)，发现 ${data.models.length} 个模型`;
         $('#channel-models').value = data.models.map(m => m.id).join(', ');
+      } else {
+        const existing = $('#channel-models').value.trim();
+        result.textContent = existing
+          ? `✅ 连接成功 (${data.latency}ms)，已使用预设模型列表`
+          : `✅ 连接成功 (${data.latency}ms)，请手动填入模型名称`;
       }
+      result.style.color = 'var(--green)';
     } else {
       result.textContent = `❌ 失败: ${data.error || `HTTP ${data.status}`}`;
       result.style.color = 'var(--red)';
@@ -7839,8 +7885,12 @@ async function init() {
     const sessions = await apiGet('/api/session');
     const savedMessages = loadMessages();
     for (const s of sessions) {
-      // Restore messages from localStorage if available
-      const msgs = savedMessages[s.id] || [];
+      // Restore messages: try localStorage first, fallback to server
+      let msgs = savedMessages[s.id] || [];
+      if (msgs.length === 0) {
+        const serverMsgs = await loadMessagesFromServer(s.id);
+        if (serverMsgs) msgs = serverMsgs;
+      }
       // Strip network error blocks left by page refresh during streaming
       for (const m of msgs) {
         if (m.blocks) m.blocks = m.blocks.filter(b => !(b.type === 'error' && /network|abort|fetch|failed to fetch|load failed/i.test(b.message || '')));
@@ -9192,10 +9242,45 @@ function renderTreeNodes(nodes, container, depth) {
       item.innerHTML = `<span class="fe-arrow"></span>`
         + `<span class="fe-icon">${feIcon(node.name, false, false)}</span>`
         + `<span class="fe-name">${escapeHtml(node.name)}</span>`
-        + `<span class="fe-size">${feFormatSize(node.size)}</span>`;
-      item.addEventListener('click', () => selectFilePreview(node.path));
+        + `<span class="fe-size">${feFormatSize(node.size)}</span>`
+        + `<button class="fe-delete" title="删除文件">&times;</button>`;
+      item.addEventListener('click', (e) => {
+        if (e.target.closest('.fe-delete')) return;  // handled by delete btn
+        selectFilePreview(node.path);
+      });
+      item.querySelector('.fe-delete').addEventListener('click', (e) => {
+        e.stopPropagation();
+        deleteFileFromTree(node.path, node.name);
+      });
       container.appendChild(item);
     }
+  }
+}
+
+async function deleteFileFromTree(filePath, fileName) {
+  if (!confirm(`确定删除 ${fileName}？`)) return;
+  const sid = state.activeSessionId;
+  if (!sid) return;
+  try {
+    const res = await fetch(`${BRIDGE}/api/files/${sid}?path=${encodeURIComponent(filePath)}`, { method: 'DELETE' });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      alert(`删除失败: ${err.error || res.statusText}`);
+      return;
+    }
+    // If previewing this file, go back to chat
+    if (feState.activeFile === filePath && feState.previewMode) backToChat();
+    // Refresh file tree
+    feState.treeData = null;
+    loadFileTree(sid);
+    // Notify AI that the file was deleted by sending a real message to the SDK
+    const session = state.sessions.get(sid);
+    if (session && !state.streamingSessions.has(sid)) {
+      const hint = `[系统通知] 用户已手动删除文件: ${filePath}，请知悉，后续不要再对该文件进行读写操作。只需简短确认即可。`;
+      sendMessage(hint);
+    }
+  } catch (e) {
+    alert(`删除失败: ${e.message}`);
   }
 }
 

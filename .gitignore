@@ -10,6 +10,11 @@ dist/
 node_modules/
 release/
 
+# Tauri build artifacts
+src-tauri/target/
+src-tauri/binaries/
+src-tauri/sdk-assets/
+
 # Environment
 .env
 .bridge.pid

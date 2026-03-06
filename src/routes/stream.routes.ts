@@ -779,7 +779,8 @@ async function runStreamQuery(
   let promptAdditions = `\n\n[Bridge Environment]\n` +
     `Bridge root: ${BRIDGE_ROOT}\n` +
     `Bridge node_modules: ${BRIDGE_ROOT}/node_modules\n` +
-    `Session working directory: ${session.cwd}`;
+    `Session working directory: ${session.cwd}\n` +
+    `IMPORTANT: All generated files (screenshots, documents, exports, etc.) MUST be saved to the session working directory "${session.cwd}" — never save to Desktop, home directory, or any other location unless the user explicitly specifies an absolute path.`;
 
   if (skillNames.length > 0) {
     // Try to preload skills via SDK (type not exported but runtime may support)

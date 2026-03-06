@@ -34,6 +34,15 @@ const MODEL_CHANNELS_FILE = join(CONFIG_DIR, 'model-channels.json');
 
 /** Resolve the path to the Claude Agent SDK's bundled cli.js for use as pathToClaudeCodeExecutable. */
 export function getClaudeCodeExecutablePath(): string {
+  // Sidecar/Tauri mode: SDK assets shipped alongside the binary
+  const sdkAssetsDir = process.env.SDK_ASSETS_DIR;
+  if (sdkAssetsDir) {
+    const sidecarPath = join(sdkAssetsDir, 'cli.js');
+    if (existsSync(sidecarPath)) return sidecarPath;
+  }
+  const sidecarPath = join(BRIDGE_ROOT, 'sdk-assets', 'cli.js');
+  if (existsSync(sidecarPath)) return sidecarPath;
+
   try {
     const require = createRequire(join(BRIDGE_ROOT, 'package.json'));
     return require.resolve('@anthropic-ai/claude-agent-sdk/cli.js');
@@ -156,6 +165,7 @@ export class SessionManager {
       this.deleteSessionFile(id);
       this.deleteSessionUploads(id);
       this.deleteSessionMemory(id);
+      this.deleteSessionMessages(id);
       // Only delete ephemeral tasks, NOT teams (teams are persistent evolution assets)
       this.deleteSessionTasks(id);
     }
@@ -319,6 +329,46 @@ export class SessionManager {
     }, 1000));
   }
 
+  // ---- Frontend message persistence (survives WebView storage wipes) ----
+
+  saveMessages(id: string, messages: unknown[]): void {
+    if (!this.sessions.has(id)) return;
+    try {
+      const filePath = join(SESSIONS_DIR, `${id}.messages.json`);
+      writeFileSync(filePath, JSON.stringify(messages), 'utf-8');
+    } catch (err) {
+      console.error(`Failed to save messages for session ${id}:`, err);
+    }
+  }
+
+  private saveMessagesDebounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+  saveMessagesDebounced(id: string, messages: unknown[]): void {
+    const existing = this.saveMessagesDebounceTimers.get(id);
+    if (existing) clearTimeout(existing);
+    this.saveMessagesDebounceTimers.set(id, setTimeout(() => {
+      this.saveMessagesDebounceTimers.delete(id);
+      this.saveMessages(id, messages);
+    }, 2000));
+  }
+
+  loadMessages(id: string): unknown[] | null {
+    try {
+      const filePath = join(SESSIONS_DIR, `${id}.messages.json`);
+      if (!existsSync(filePath)) return null;
+      return JSON.parse(readFileSync(filePath, 'utf-8'));
+    } catch {
+      return null;
+    }
+  }
+
+  private deleteSessionMessages(id: string): void {
+    try {
+      const msgFile = join(SESSIONS_DIR, `${id}.messages.json`);
+      if (existsSync(msgFile)) unlinkSync(msgFile);
+    } catch {}
+  }
+
   /** Get the upload directory for a session */
   getUploadDir(id: string): string {
     return join(UPLOADS_DIR, id);
@@ -411,11 +461,11 @@ export class SessionManager {
           }
         }
       }
-      // Orphan session memory files
+      // Orphan session memory and messages files
       if (existsSync(SESSIONS_DIR)) {
         for (const file of readdirSync(SESSIONS_DIR)) {
-          if (file.endsWith('.memory.md')) {
-            const sessionId = file.replace('.memory.md', '');
+          if (file.endsWith('.memory.md') || file.endsWith('.messages.json')) {
+            const sessionId = file.replace(/\.(memory\.md|messages\.json)$/, '');
             if (!this.sessions.has(sessionId)) {
               try { unlinkSync(join(SESSIONS_DIR, file)); cleaned++; } catch {}
             }

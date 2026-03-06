@@ -9,7 +9,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { execFile } from 'child_process';
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
-import { SessionManager, UPLOADS_DIR, GLOBAL_SKILLS_DIR, MEMORY_DIR, SESSIONS_DIR, KNOWLEDGE_DIR, type ServerConfig } from './services/session-manager.js';
+import { SessionManager, UPLOADS_DIR, GLOBAL_SKILLS_DIR, MEMORY_DIR, SESSIONS_DIR, KNOWLEDGE_DIR, BRIDGE_ROOT, type ServerConfig } from './services/session-manager.js';
 import { SdkBridge } from './services/sdk-bridge.js';
 import { EvolutionEngine } from './services/evolution-engine.js';
 import { BackgroundExecService } from './services/background-exec.js';
@@ -80,7 +80,7 @@ export async function createServer() {
   });
 
   // ---- .env Configuration API ----
-  const ENV_PATH = join(__dirname, '..', '.env');
+  const ENV_PATH = join(BRIDGE_ROOT, '.env');
 
   function parseEnvFile(): { key: string; value: string; commented: boolean }[] {
     if (!existsSync(ENV_PATH)) return [];
@@ -349,6 +349,34 @@ export async function createServer() {
   app.get<{ Params: { sessionId: string; '*': string } }>('/api/files/:sessionId/*', fileHandler);
   app.get<{ Params: { sessionId: string }; Querystring: { path?: string } }>('/api/files/:sessionId', fileHandler);
 
+  // Delete a file from the session working directory
+  app.delete<{ Params: { sessionId: string }; Querystring: { path: string } }>(
+    '/api/files/:sessionId',
+    async (request, reply) => {
+      const session = sessionManager.get(request.params.sessionId);
+      if (!session) return reply.code(404).send({ error: 'Session not found' });
+      const filePath = request.query.path;
+      if (!filePath) return reply.code(400).send({ error: 'path query param required' });
+
+      const { resolve, join } = await import('path');
+      const { unlinkSync, existsSync } = await import('fs');
+      // Security: resolve and ensure it's within the session cwd
+      const absPath = filePath.startsWith('/') ? filePath : resolve(session.cwd, filePath);
+      if (!absPath.startsWith(session.cwd)) {
+        return reply.code(403).send({ error: 'Path is outside session working directory' });
+      }
+      if (!existsSync(absPath)) {
+        return reply.code(404).send({ error: 'File not found' });
+      }
+      try {
+        unlinkSync(absPath);
+        return reply.send({ ok: true, deleted: absPath });
+      } catch (err: any) {
+        return reply.code(500).send({ error: `Delete failed: ${err.message}` });
+      }
+    },
+  );
+
   // List directory contents (ls -ltra style)
   app.get<{ Params: { sessionId: string }; Querystring: { path?: string } }>(
     '/api/ls/:sessionId',
@@ -517,7 +545,7 @@ export async function createServer() {
   );
 
   // Serve the web terminal UI (with optional live reload in non-Electron dev)
-  const htmlPath = join(__dirname, '..', 'web', 'index.html');
+  const htmlPath = join(BRIDGE_ROOT, 'web', 'index.html');
   const isElectron = process.env.ELECTRON === '1';
   const LIVE_RELOAD_SCRIPT = `<script>(function(){var ws,retry=0;function connect(){ws=new WebSocket('ws://'+location.host+'/__lr');ws.onmessage=function(e){if(e.data==='reload')location.reload()};ws.onopen=function(){retry=0};ws.onclose=function(){setTimeout(connect,Math.min(1000*Math.pow(2,retry++),5000))}};connect()})()</script>`;
 
@@ -546,7 +574,7 @@ export async function createServer() {
         socket.destroy();
       }
     });
-    watch(join(__dirname, '..', 'web'), { recursive: true }, () => {
+    watch(join(BRIDGE_ROOT, 'web'), { recursive: true }, () => {
       for (const client of wss!.clients) {
         if (client.readyState === WebSocket.OPEN) client.send('reload');
       }
