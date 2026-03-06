@@ -1,0 +1,20 @@
+# Runtime data (Zone 3)
+data/
+
+# Legacy (migrated to data/ and knowledge/)
+.claude-bridge-data/
+/memory/
+
+# Build output
+dist/
+node_modules/
+
+# Environment
+.env
+.bridge.pid
+
+# macOS
+.DS_Store
+
+# SDK uploads (legacy)
+.claude-uploads/

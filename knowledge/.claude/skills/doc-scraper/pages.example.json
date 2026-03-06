@@ -1,0 +1,19 @@
+{
+  "base_url": "https://docs.example.com",
+  "output_dir": "./example-docs",
+  "max_workers": 4,
+  "categories": {
+    "01-getting-started": {
+      "intro": "/en/docs/intro",
+      "quickstart": "/en/docs/quickstart"
+    },
+    "02-guides": {
+      "installation": "/en/docs/guides/installation",
+      "configuration": "/en/docs/guides/configuration"
+    },
+    "03-api-reference": {
+      "authentication": "/en/docs/api/auth",
+      "endpoints": "/en/docs/api/endpoints"
+    }
+  }
+}

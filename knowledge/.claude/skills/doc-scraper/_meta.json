@@ -1,0 +1,9 @@
+{
+  "name": "doc-scraper",
+  "version": "1.0.0",
+  "description": "将在线文档网站批量抓取为本地结构化 Markdown",
+  "author": "SwarmPath",
+  "created": "2026-03-05",
+  "tags": ["web-scraping", "documentation", "markdown", "knowledge-base"],
+  "scope": "global"
+}
