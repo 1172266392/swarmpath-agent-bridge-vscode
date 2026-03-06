@@ -121,6 +121,7 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   font-size: 10px;
 }
 #header .btn-icon:hover { color: var(--text); border-color: var(--accent); }
+#header .btn-icon.active { background: var(--accent); color: #fff; border-color: var(--accent); }
 #header .cost-badge { font-size: 11px; color: var(--yellow); }
 .header-right-actions .btn-icon { font-size: 16px; padding: 4px 8px; }
 .header-right-actions {
@@ -1392,7 +1393,7 @@ html[data-theme="light"] .theme-btn.active { background: rgba(9,105,218,.08); }
 
 /* ===== File Explorer Panel ===== */
 #file-explorer {
-  width: 300px; min-width: 200px; max-width: 50vw; background: var(--surface);
+  width: 300px; min-width: 140px; max-width: 50vw; background: var(--surface);
   border-right: 1px solid var(--border); display: flex; flex-direction: column;
   transition: width .2s, min-width .2s; overflow: hidden; flex-shrink: 0;
 }
@@ -1546,7 +1547,7 @@ html[data-theme="light"] .theme-btn.active { background: rgba(9,105,218,.08); }
   <!-- Main -->
   <div id="main">
     <div id="header">
-      <button id="btn-toggle-sidebar-float" title="折叠/展开侧边栏">&#9776;</button>
+      <button id="btn-toggle-sidebar-float" title="会话列表">&#9776;</button>
       <span class="session-title" id="header-title">未选择会话</span>
       <div class="cwd-display">
         <span class="cwd-path" id="header-cwd">-</span>
@@ -5427,6 +5428,20 @@ function extractGeneratedFiles(blocks) {
   const DELIVERABLE_EXTS = /\.(docx|doc|pptx|ppt|xlsx|xls|pdf|csv|png|jpg|jpeg|gif|webp|svg|ipynb|html|htm)$/i;
   const SOURCE_EXTS = /\.(js|ts|jsx|tsx|py|rb|go|rs|java|cpp|c|h|sh|bash|css|scss|md|txt|json|xml|yaml|yml|toml|ini|conf|sql)$/i;
 
+  // Skip intermediate/build source files — only show final deliverables
+  const SKIP_DIRS = /\/(node_modules|\.next|\.cache|\.parcel-cache|src|public|components|lib|utils|hooks|pages|app)\//i;
+  const SKIP_NAMES = /^(vite\.svg|favicon\.\w+|logo\.\w+|robots\.txt|manifest\.json|tsconfig\.json|package\.json|\.gitignore)$/i;
+
+  function isDeliverable(fp, name) {
+    if (SKIP_NAMES.test(name)) return false;
+    if (SKIP_DIRS.test(fp)) {
+      // Allow files in dist/build/out directories even if nested
+      if (/\/(dist|build|out|output|artifacts)\//.test(fp)) return true;
+      return false;
+    }
+    return true;
+  }
+
   // === Pass 1: Collect authoritative paths from Write/Edit tool blocks ===
   // These have exact file paths, so they always take priority
   for (const block of blocks) {
@@ -5435,7 +5450,7 @@ function extractGeneratedFiles(blocks) {
       if (fp && !seenPaths.has(fp)) {
         const name = fp.split('/').pop();
         const ext = name.includes('.') ? name.split('.').pop().toLowerCase() : '';
-        if (DELIVERABLE_EXTS.test(fp) && !seenNames.has(name.toLowerCase())) {
+        if (DELIVERABLE_EXTS.test(fp) && !seenNames.has(name.toLowerCase()) && isDeliverable(fp, name)) {
           seenPaths.add(fp);
           seenNames.add(name.toLowerCase());
           files.push({ path: fp, name, ext });
@@ -5460,7 +5475,7 @@ function extractGeneratedFiles(blocks) {
       const pathMatches = cmd.match(/\/[^\s"';&|>]+\.\w+/g) || [];
       for (const fp of pathMatches) {
         if (fp.startsWith('//')) continue; // skip protocol-relative external URLs
-        if (!seenPaths.has(fp) && DELIVERABLE_EXTS.test(fp) && isRealPath(fp)) {
+        if (!seenPaths.has(fp) && DELIVERABLE_EXTS.test(fp) && isRealPath(fp) && isDeliverable(fp, fp.split('/').pop())) {
           const name = fp.split('/').pop();
           if (seenNames.has(name.toLowerCase())) continue;
           // For Bash: require output patterns OR last argument position
@@ -5492,7 +5507,7 @@ function extractGeneratedFiles(blocks) {
       const pathMatches = content.match(/\/[^\s"';&|>\n]+\.\w{2,5}/g) || [];
       for (const fp of pathMatches) {
         if (fp.startsWith('//')) continue; // skip protocol-relative external URLs
-        if (DELIVERABLE_EXTS.test(fp) && !seenPaths.has(fp) && isRealPath(fp)) {
+        if (DELIVERABLE_EXTS.test(fp) && !seenPaths.has(fp) && isRealPath(fp) && isDeliverable(fp, fp.split('/').pop())) {
           const name = fp.split('/').pop();
           if (seenNames.has(name.toLowerCase())) continue;
           seenPaths.add(fp);
@@ -5510,7 +5525,7 @@ function extractGeneratedFiles(blocks) {
       const pathMatches = block.text.match(/(?:\/[\w./-]+\.\w{2,5})/g) || [];
       for (const fp of pathMatches) {
         if (DELIVERABLE_EXTS.test(fp) && !seenPaths.has(fp) && fp.split('/').length >= 3
-            && isRealPath(fp) && REAL_PATH_PREFIX.test(fp)) {
+            && isRealPath(fp) && REAL_PATH_PREFIX.test(fp) && isDeliverable(fp, fp.split('/').pop())) {
           const name = fp.split('/').pop();
           if (seenNames.has(name.toLowerCase())) continue;
           seenPaths.add(fp);
@@ -5525,7 +5540,7 @@ function extractGeneratedFiles(blocks) {
         const fname = m[1];
         if (seenNames.has(fname.toLowerCase())) continue;
         const dir = m[2].replace(/\/+$/, '');
-        if (DELIVERABLE_EXTS.test(fname) && isRealPath(dir + '/' + fname)) {
+        if (DELIVERABLE_EXTS.test(fname) && isRealPath(dir + '/' + fname) && isDeliverable(dir + '/' + fname, fname)) {
           const fp = dir + '/' + fname;
           if (!seenPaths.has(fp)) {
             seenPaths.add(fp);
@@ -8968,7 +8983,21 @@ function feFormatSize(bytes) {
 function toggleFileExplorer(force) {
   feState.open = typeof force === 'boolean' ? force : !feState.open;
   fePanel.classList.toggle('collapsed', !feState.open);
+  $('#btn-toggle-fe').classList.toggle('active', feState.open);
+  if (!feState.open) {
+    // Clear inline styles so CSS .collapsed { width:0 } takes effect
+    fePanel.style.width = '';
+    fePanel.style.minWidth = '';
+  } else {
+    // Restore saved width
+    const saved = localStorage.getItem('fe-width');
+    if (saved) { fePanel.style.width = saved + 'px'; fePanel.style.minWidth = saved + 'px'; }
+  }
   localStorage.setItem('fe-open', feState.open ? '1' : '');
+  // Exit preview mode when closing
+  if (!feState.open && feState.previewMode) {
+    backToChat();
+  }
   // Load tree if opening and we have a session
   if (feState.open && state.activeSessionId && !feState.treeData) {
     loadFileTree(state.activeSessionId);
@@ -9123,7 +9152,7 @@ async function selectFilePreview(path) {
 function _showRendered(wrap, content, path, ext) {
   if (ext === 'html' || ext === 'htm') {
     const fileUrl = `${BRIDGE}/api/files/${state.activeSessionId}?path=${encodeURIComponent(path)}`;
-    wrap.innerHTML = `<iframe sandbox="allow-same-origin" style="flex:1;width:100%;height:100%;border:none;background:#fff;border-radius:4px;" src="${fileUrl}"></iframe>`;
+    wrap.innerHTML = `<iframe sandbox="allow-scripts allow-same-origin" style="flex:1;width:100%;height:100%;border:none;background:#fff;border-radius:4px;" src="${fileUrl}"></iframe>`;
   } else if (ext === 'md') {
     wrap.innerHTML = `<div class="md-preview" style="padding:20px 24px;overflow:auto;flex:1;line-height:1.7;">${md(content)}</div>`;
     applyHighlight();
@@ -9190,7 +9219,7 @@ function openFileInChat(path) {
   });
   function onMove(e) {
     if (!dragging) return;
-    const newW = Math.max(200, Math.min(window.innerWidth * 0.5, startW + (e.clientX - startX)));
+    const newW = Math.max(140, Math.min(window.innerWidth * 0.5, startW + (e.clientX - startX)));
     fePanel.style.width = newW + 'px';
     fePanel.style.minWidth = newW + 'px';
   }
@@ -9219,13 +9248,8 @@ $('#btn-open-in-chat').addEventListener('click', () => openFileInChat(feState.ac
 
 // Restore persisted state
 (function restoreFeState() {
-  const savedWidth = localStorage.getItem('fe-width');
-  if (savedWidth) {
-    fePanel.style.width = savedWidth + 'px';
-    fePanel.style.minWidth = savedWidth + 'px';
-  }
   if (localStorage.getItem('fe-open') === '1') {
-    toggleFileExplorer(true);
+    toggleFileExplorer(true);  // this restores saved width internally
   }
 })();
 

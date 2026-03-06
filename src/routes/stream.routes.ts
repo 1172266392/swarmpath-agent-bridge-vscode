@@ -27,16 +27,37 @@ const activeQueries = new Map<string, ActiveQuery>();
 
 // Periodic stale query cleanup (queries stuck > 30 minutes)
 const STALE_QUERY_TIMEOUT = 30 * 60_000;
+// Busy session without active query — reset after 5 minutes
+const ORPHAN_BUSY_TIMEOUT = 5 * 60_000;
+let _staleCleanupSessionManager: SessionManager | null = null;
+
 setInterval(() => {
   const now = Date.now();
+  // 1. Clean up stale active queries
   for (const [id, query] of activeQueries) {
     if (now - query.startTime > STALE_QUERY_TIMEOUT) {
       console.warn(`[STALE_QUERY] Cleaning up stuck query for session ${id} (age: ${Math.round((now - query.startTime) / 60_000)}min)`);
       try { query.abort(); } catch {}
       activeQueries.delete(id);
+      if (_staleCleanupSessionManager) {
+        try { killChildClaude(console as any, id); } catch {}
+        _staleCleanupSessionManager.markIdle(id);
+      }
     }
   }
-}, 5 * 60_000); // Check every 5 minutes
+  // 2. Clean up orphaned busy sessions (no active query but still marked busy)
+  if (_staleCleanupSessionManager) {
+    for (const session of _staleCleanupSessionManager.list()) {
+      if (session.status === 'busy' && !activeQueries.has(session.id)) {
+        if (now - session.lastActiveAt > ORPHAN_BUSY_TIMEOUT) {
+          console.warn(`[ORPHAN_BUSY] Session ${session.id} (${session.name}) stuck busy with no active query for ${Math.round((now - session.lastActiveAt) / 60_000)}min — resetting to idle`);
+          try { killChildClaude(console as any, session.id); } catch {}
+          _staleCleanupSessionManager.markIdle(session.id);
+        }
+      }
+    }
+  }
+}, 60_000); // Check every minute
 
 // ---------------------------------------------------------------------------
 // Tool Observation Logger — append-only JSONL per session
@@ -202,6 +223,7 @@ export function registerStreamRoutes(
   evolutionEngine?: EvolutionEngine,
 ) {
   _evolutionEngine = evolutionEngine ?? null;
+  _staleCleanupSessionManager = sessionManager;
   /**
    * SSE streaming — directly invokes SDK query and pipes to response.
    */
